@@ -1,0 +1,1601 @@
+
+DECLARE @BeginDate AS int
+DECLARE @EndDate AS int
+DECLARE @FiscalBeginMinus1 AS int
+DECLARE @dtBeginDateTime AS datetime
+DECLARE @intProcessID AS int = 126
+
+SELECT @BeginDate = PKMSDate
+FROM MasterData.dbo.vFiscalCalendar
+WHERE Date = CAST(DATEADD(day,-7,GETDATE()) AS DATE)
+						
+SELECT @EndDate = PKMSDate
+FROM MasterData.dbo.vFiscalCalendar
+WHERE Date = CAST(DATEADD(day,-1,GETDATE()) AS DATE)
+
+SELECT @FiscalBeginMinus1 = CONVERT(varchar(8),CAST(DATEADD(day,-365,Date) AS DATE),112)
+FROM MasterData.dbo.vFiscalCalendar
+WHERE Date = CAST(DATEADD(day,-7,GETDATE()) AS DATE)
+
+--Print @BeginDate
+--Print @EndDate
+--Print @FiscalBeginMinus1
+
+
+
+SET @dtBeginDateTime = GETDATE()
+
+TRUNCATE TABLE Staging.dbo.OutboundMaster
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Truncate Staging.dbo.OutboundMaster', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull O4 File Data SYSG
+INSERT INTO Staging.dbo.OutboundMaster(Source,PlantCode,ControlNo,ControlLineNo,CartonNo,SeasonCode,MaterialID,SizeCode,UPC,MinorControlNo,
+											O4CreatedDateTime,PackedUnits,ShipDateTime,O4MiscIns2)
+SELECT D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR+D.O4STYL+D.O4SSFX,D.O4SZDS,D.O4BRCD,ISNULL(D.O4MPKT,''),
+						MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),SUM(D.O4PAKU),MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),D.O4MIS2
+FROM PkMSData.dbo.O4OPUT00 D		
+WHERE D.Source = 'SYSG' AND D.PlantCode IN ('501','502') AND O4DCR BETWEEN @BeginDate AND @EndDate 
+GROUP BY D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR,D.O4STYL,D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,D.O4DCR,D.O4TCR,D.O4MIS2
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O4OPUT00 Data SYSG', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull O4 File Data SYSG (PFS)
+INSERT INTO Staging.dbo.OutboundMaster(Source,PlantCode,ControlNo,ControlLineNo,CartonNo,SeasonCode,MaterialID,SizeCode,UPC,MinorControlNo,
+											O4CreatedDateTime,PackedUnits,ShipDateTime,DistroNo,O4MiscIns2)
+SELECT D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR+D.O4STYL+D.O4SSFX,D.O4SZDS,D.O4BRCD,ISNULL(D.O4MPKT,''),
+						MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),SUM(D.O4PAKU),MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),D.O4DSTR,D.O4MIS2
+FROM PkMSData.dbo.O4OPUT00 D		
+WHERE D.Source = 'SYSG' AND D.PlantCode = '001' AND O4SEA = '01' AND O4DCR BETWEEN @BeginDate AND @EndDate
+GROUP BY D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR,D.O4STYL,D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,D.O4DCR,D.O4TCR,D.O4DSTR,D.O4MIS2
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O4OPUT00 Data SYSG (PFS)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull O4 File Data RLIP1PKG - separate b/c NC66 sometimes manifests and invoices on different days creating "duplicate" OFILE records, but only one has a ship date
+--										Example: O4PCTL = '2004784939' AND O4CASN = '00000088292659803387' AND O4BRCD = '190760341298'
+
+
+IF OBJECT_ID('tempdb..#O3_Temp') IS NOT NULL DROP TABLE #O3_Temp;
+
+SELECT DISTINCT Source,PlantCode,O3DCR AS Created,O3PCTL,O3CASN
+INTO #O3_Temp
+FROM PkMSData.dbo.O3OPUT00 WHERE Source = 'NC66' AND PlantCode IN ('566','507','562') AND O3DCR BETWEEN @BeginDate AND @EndDate AND O3SHDT <> 0
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O3OPUT00 Data NC66', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+INSERT INTO Staging.dbo.OutboundMaster(Source,PlantCode,ControlNo,ControlLineNo,CartonNo,SeasonCode,MaterialID,SizeCode,UPC,MinorControlNo,
+											O4CreatedDateTime,PackedUnits,ShipDateTime,O4MiscIns2)
+SELECT D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR+D.O4STYL+D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,
+						MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),SUM(D.O4PAKU),MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),D.O4MIS2
+FROM PkMSData.dbo.O4OPUT00 D		
+	INNER JOIN #O3_Temp H	
+		ON D.Source = H.Source AND D.PlantCode = H.PlantCode AND O4DCR = CAST(H.Created AS varchar) AND D.O4PCTL = H.O3PCTL AND D.O4CASN = H.O3CASN
+GROUP BY D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR,D.O4STYL,D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,D.O4DCR,D.O4TCR,D.O4MIS2
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O4OPUT00 Data NC66', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull O4 File Data RLSYS01
+INSERT INTO Staging.dbo.OutboundMaster(Source,PlantCode,ControlNo,ControlLineNo,CartonNo,SeasonCode,MaterialID,SizeCode,UPC,MinorControlNo,
+											O4CreatedDateTime,PackedUnits,ShipDateTime,O4MiscIns2)
+SELECT D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR+D.O4STYL+D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,
+						MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),SUM(D.O4PAKU),MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),D.O4MIS2
+FROM PkMSData.dbo.O4OPUT00 D		
+WHERE D.Source = 'RLSYS01' AND D.PlantCode IN ('HPD','CAN') AND O4DCR BETWEEN @BeginDate AND @EndDate 
+GROUP BY D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR,D.O4STYL,D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,D.O4DCR,D.O4TCR,D.O4MIS2
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O4OPUT00 Data RLSYS01', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull O4 File Data NLS
+INSERT INTO Staging.dbo.OutboundMaster(Source,PlantCode,ControlNo,ControlLineNo,CartonNo,SeasonCode,MaterialID,SizeCode,UPC,MinorControlNo,
+											O4CreatedDateTime,PackedUnits,ShipDateTime,O4MiscIns2)
+SELECT D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR+D.O4STYL+D.O4SSFX,D.O4SZDS,D.O4BRCD,ISNULL(D.O4MPKT,''),
+						MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),SUM(D.O4PAKU),MasterData.dbo.ConvertAS400DateTime(D.O4DCR,D.O4TCR),O4MIS2
+FROM PkMSData.dbo.O4OPUT00 D		
+WHERE D.Source = 'NLS' AND O4DCR BETWEEN @BeginDate AND @EndDate  -- AND O4PCTL like 'I1%'  -- As of 7/27/2025 this is no longer needed - see notes section
+GROUP BY D.Source,D.PlantCode,D.O4PCTL,D.O4PKLN,D.O4CASN,D.O4SEA,D.O4SYR,D.O4STYL,D.O4SSFX,D.O4SZDS,D.O4BRCD,D.O4MPKT,D.O4DCR,D.O4TCR,D.O4MIS2
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull O4OPUT00 Data SYSG (NLS)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update FiscalYear
+UPDATE Staging.dbo.OutboundMaster SET FiscalYear = F.FiscalYearText
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN MasterData.dbo.vFiscalCalendar F
+		ON CAST(O.ShipDateTime AS DATE) = CAST(F.Date AS DATE)
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Fiscal Year', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in PickTicket Header Info (Major Data)
+UPDATE Staging.dbo.OutboundMaster SET OrderNumber = P.PHORDN,OrderDateTime = MasterData.dbo.ConvertAS400DateTime(P.PHORDT,'120000'),StartShipDate = MasterData.dbo.ConvertAS400DateTime(P.PHSTDT,'120000'),
+											StopShipDate = MasterData.dbo.ConvertAS400DateTime(P.PHCMDT,'120000'),
+											PickTicketCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(P.PHPDCR,PHPTCR),PlannedShipVia = P.PHSVIA, RoutingType = P.PHROTP, OrderType = P.PHOTYP,
+											ServiceLevel = P.PHSVLV, BusinessDivision = P.PHBSDV, MajorMinorInd = P.PHMSPK, SoldTo = P.PHSOTO,
+											ShipTo = P.PHSHTO, SoldToName = P.PHSONM, PktNumber = P.PHPKTN,PHMisc11 = P.PHMS11, PHSpecInstrCode1 = P.PHSC1,
+											PHSpecInstrCode2 = P.PHSC2,PHSpecInstrCode3 = P.PHSC3,PHSpecInstrCode5 = P.PHSC5,WaveNo = P.PHPRWV,
+											CustomerPO = P.PHCUPO,ShipToCity = P.PHSHCT, ShipToState = P.PHSHST, ShipToZip = P.PHSHZP, RefPktCtlNo = P.PHRFPN,MarkFor = P.PHMRKF,
+											StoreCode = P.PHSTOR,HandlingCharges = P.PHHCHG,PHMisc9 = P.PHMIS9,ShiptoCountry = P.PHSHCN,RoutingType2 = P.PHROT2,SalesGroup = P.PHSGRP,
+											PHSpecInstrCode4 = P.PHSC4, HostApointmentNumber = P.PHAPPT,FreightTerms = P.PHCFRT
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN PkMSData.dbo.PHPICK00 P
+		ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.ControlNo = P.PHPCTL
+WHERE PHPDCR >= @FiscalBeginMinus1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update PickTicket Header Info (Major Data)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in PickTicket Header Info (Minor Data RLIP1PKG)
+UPDATE Staging.dbo.OutboundMaster SET OrderNumber = P.PHORDN,PktNumber = P.PHPKTN,CustomerPO = P.PHCUPO,
+			PickTicketCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(P.PHPDCR,PHPTCR)
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN PkMSData.dbo.PHPICK00 P
+		ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.MinorControlNo = P.PHPCTL 
+WHERE O.Source = 'NC66'  AND PHPDCR >= @FiscalBeginMinus1 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update PickTicket Header Info (Minor Data NC66)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in PickTicket Header Info (Minor Data SYG)
+UPDATE Staging.dbo.OutboundMaster SET OrderNumber = P.PHORDN,PktNumber = P.PHPKTN,CustomerPO = P.PHCUPO,
+			PickTicketCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(P.PHPDCR,PHPTCR)
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN PkMSData.dbo.PHPICK00 P
+		ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.O4MiscIns2 = P.PHPCTL 
+WHERE O.Source = 'SYSG'  AND PHPDCR >= @FiscalBeginMinus1 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update PickTicket Header Info (Minor Data SYSG)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in PickTicket Header Info (NLS)
+UPDATE Staging.dbo.OutboundMaster SET OrderNumber = P.O1ORDN,PickTicketCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(O1DCR,O1TCR),
+											PlannedShipVia = P.O1SVIA, OrderType = P.O1OTYP, MajorMinorInd = P.O1MSPK, SoldTo = P.O1SOTO,
+											ShipTo = P.O1SHTO, SoldToName = P.O1SHNM, PktNumber = P.O1PKTN,PHMisc11 = P.O1MS11, PHSpecInstrCode1 = P.O1SC1,
+											PHSpecInstrCode2 = P.O1SC2,PHSpecInstrCode3 = P.O1SC3,PHSpecInstrCode5 = P.O1SC5,
+											CustomerPO = P.O1CUPO,ShipToCity = P.O1SHCT, ShipToState = P.O1SHST, ShipToZip = P.O1SHZP, RefPktCtlNo = P.O1RFPN,
+											StoreCode = P.O1STOR,HandlingCharges = P.O1HCHG,PHMisc9 = P.O1MIS9,ShiptoCountry = P.O1SHCN,
+											PHSpecInstrCode4 = P.O1SC4, HostApointmentNumber = P.O1APPT,FreightTerms = P.O1CFRT
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN (SELECT A.* 
+				FROM PkMSData.dbo.O1OPUT00 A
+					INNER JOIN (SELECT O1.Source,O1.PlantCode,O1.O1PCTL,MIN(MasterData.dbo.ConvertAS400DateTime(O1.O1DCR,O1.O1TCR)) AS MinCreated
+									FROM PkMSData.dbo.O1OPUT00 O1
+										INNER JOIN (SELECT DISTINCT Source,Plantcode, ControlNo
+													FROM Staging.dbo.OutboundMaster
+													WHERE Source = 'NLS') O
+											ON O1.Source = O.Source AND O1.PlantCode = O.PlantCode AND O1.O1PCTL = O.ControlNo
+									WHERE O1.Source = 'NLS' 
+									GROUP BY O1.Source,O1.PlantCode,O1.O1PCTL) B
+						ON A.Source = B.Source AND A.PlantCode = B.PlantCode AND A.O1PCTL = B.O1PCTL AND
+							MasterData.dbo.ConvertAS400DateTime(A.O1DCR,A.O1TCR) = B.MinCreated) P
+		ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.ControlNo = P.O1PCTL
+WHERE O.Source = 'NLS' AND O1DCR >= @FiscalBeginMinus1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update PickTicket Header Info (NLS)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Channel and Division
+UPDATE Staging.dbo.OutboundMaster SET Channel = 
+CASE 
+	WHEN PlantCode IN ('501','502','507','562') THEN 'Wholesale'
+	WHEN PlantCode = '566' AND OrderType = 'PF' THEN 'Retail' 
+	WHEN PlantCode = '566' THEN 'Wholesale' 
+	WHEN PlantCode = '001' THEN 'Retail'
+	WHEN PlantCode = 'HPD' AND (PHSpecInstrCode2 = '81' OR OrderType = 'WH') THEN 'Wholesale'
+	WHEN PlantCode = 'HPD' AND (PHSpecInstrCode2 = '71' OR OrderType = 'RL' OR PHSpecInstrCode2 = '82') THEN 'Retail'
+	WHEN PlantCode = 'HPD' AND PHSpecInstrCode2 = '88' THEN 'DTC'
+	WHEN PlantCode = 'HPD' THEN 'DTC'
+	WHEN PlantCode = 'CAN' THEN 'DTC'
+	WHEN PlantCode = 'I10' AND SeasonCode = '21' THEN 'Wholesale'
+	ELSE 'Unknown'
+END,
+Division = 
+CASE 
+	WHEN PlantCode IN ('501','502','507','562') THEN 'Wholesale'
+	WHEN PlantCode = '566' AND OrderType = 'PF' THEN 'PFS' 
+	WHEN PlantCode = '566' AND SeasonCode = '31' THEN 'CM Wholesale' 
+	WHEN PlantCode = '566' THEN 'Wholesale' 
+	WHEN PlantCode = '001' AND SeasonCode = '01' THEN 'PFS'
+	WHEN PlantCode = '001' AND SeasonCode = '02' THEN 'CMS'
+	WHEN PlantCode = 'HPD' AND PHSpecInstrCode2 = '51' THEN 'RLE-US' 
+	WHEN PlantCode = 'HPD' AND PHSpecInstrCode2 = '88' THEN 'RLE-CA'
+	WHEN PlantCode = 'HPD' AND  PHSpecInstrCode2 = '53' THEN 'CME-US' 
+	WHEN PlantCode = 'CAN' AND  PHSpecInstrCode2 = '54' THEN 'CME-CA' 
+	WHEN PlantCode = 'HPD' AND  PHSpecInstrCode2 = '55' THEN 'CME-US' 
+	WHEN PlantCode = 'CAN' AND  PHSpecInstrCode2 = '56' THEN 'CME-CA' 
+	WHEN PlantCode = 'HPD' AND  PHSpecInstrCode2 = '57' THEN 'RLE-US' 
+	WHEN PlantCode = 'HPD' AND PHSpecInstrCode2 = '82' THEN 'RLS-CA'
+	WHEN PlantCode = 'HPD' AND  (PHSpecInstrCode2 = '71' OR OrderType = 'RL') THEN 'RLS' 
+	WHEN PlantCode = 'HPD' AND  (PHSpecInstrCode2 = '81' OR OrderType = 'WH') THEN 'Wholesale'
+	WHEN PlantCode = 'HPD' AND  SeasonCode = '51' THEN 'RLE-US'
+	WHEN PlantCode = 'HPD' AND  SeasonCode = '53' THEN 'CME-US'
+	WHEN PlantCode = 'HPD' AND PHSpecInstrCode2 = '88' THEN 'RLE-CA'
+	WHEN PlantCode = 'I10' AND SeasonCode = '21' THEN 'Wholesale'
+	ELSE 'Unknown'
+END 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Channel and Division', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in Carton Header Data
+UPDATE Staging.dbo.OutboundMaster SET CartonCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(C.CHDCR,C.CHTCR),PackCode = C.CHPKCD,BillOfLading = C.CHBLAD, 
+											LoadNo = C.CHLDNO,ManifestID = C.CHMANI,TrackingNumber = C.CHTRKN,ShipVia = C.CHSVIA,WaveNo = C.CHPRWV,CartonSize = C.CHCRSZ,
+											CartonType = C.CHCRTP, CHMiscInsCode1 = C.CHMC1,CHMiscInsCode2=C.CHMC2,CHSpeclInstrCode2 = C.CHSC2,Volume = C.CHCTVL,Weight = C.CHACWT,
+											Route = C.CHROUT, PackType = C.CHPAKT, CHChuteNo = C.CHCHTN, CustomerCharge = C.CHCUCG,BaseCharge = C.CHBSCG,CarrierCharge = C.CHCACG,
+											AccessorialCharge = C.CHASCG,ActualWeight = C.CHACWT,BaseWeight = C.CHBLWT,EstimatedWeight = C.CHESWT,
+											RefCartonNo = C.CHREFC
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN PkMSData.dbo.CHCART00 C
+		ON O.Source = C.Source AND O.PlantCode = C.PlantCode AND O.ControlNo = C.CHPCTL AND O.CartonNo = C.CHCASN
+WHERE CHDLM >= @FiscalBeginMinus1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Carton Header Info', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in Carton Detail Data
+UPDATE Staging.dbo.OutboundMaster SET CDArea = C.CDAREA, CDZone = C.CDZONE, CDAisle = C.CDAISL, CDBay = C.CDBAY, 
+											CDLevel = C.CDLEVL, CDPosition = C.CDPOSN, CDAreaZone = RTRIM(C.CDAREA) + RTRIM(C.CDZONE),
+											CDLocation = RTRIM(C.CDAREA) + RTRIM(C.CDZONE)+ RTRIM(C.CDAISL)+ RTRIM(C.CDBAY)+ RTRIM(C.CDPOSN)
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN PkMSData.dbo.CDCART00 C
+		ON O.Source = C.Source AND O.PlantCode = C.PlantCode AND O.ControlNo = C.CDPCTL AND O.CartonNo = C.CDCASN AND
+			O.SeasonCode = C.CDSEA AND O.UPC = C.CDBRCD
+WHERE CDDLM >= @FiscalBeginMinus1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Carton Detail Info', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Add in PickTicket Detail Info 
+UPDATE Staging.dbo.OutboundMaster SET PDSpecInstrCode1 = P.PDSC1,RetailPrice = P.PDRPRC,PDMisc3 = P.PDMIS3,PDMisc1 = P.PDMIS1
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN PkMSData.dbo.PDPICK00 P
+		ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.ControlNo = P.PDPCTL AND O.ControlLineNo = P.PDPKLN AND O.SeasonCode = P.PDSEA AND O.UPC = P.PDBRCD
+WHERE PDDCR >= @FiscalBeginMinus1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update PickTicket Detail Info', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update WaveCreatedDateTime
+UPDATE Staging.dbo.OutboundMaster SET WaveCreatedDateTime = MasterData.dbo.ConvertAS400DateTime(WDDCR,WDTCR)
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN PkMSData.dbo.WDWAVE00 W
+		ON O.Source = W.Source AND O.PlantCode = W.PlantCode AND O.WaveNo = W.WDPRWV
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update WaveCreatedDateTime', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Set BeginDate for OutboundMetrics
+UPDATE Staging.dbo.OutboundMaster SET BeginDate = CASE WHEN Channel = 'DTC' THEN CAST(OrderDateTime AS DATE) ELSE CAST(PickTicketCreatedDateTime AS DATE) END
+WHERE Channel IN ('DTC','Retail','Wholesale')
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Set BeginDate for OutboundMetrics', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Excluded Stores
+UPDATE Staging.dbo.OutboundMaster SET AlwaysExcludeFromTimeCalcs = 
+		CASE 
+			WHEN Division = 'RLS' AND StoreCode IN ('8029','0896') THEN 'Y'  --RLS pop up stores
+			ELSE 'N' 
+		END
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Excluded Stores', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pack and Hold
+UPDATE Staging.dbo.OutboundMaster SET PackAndHold = 
+		CASE 
+			WHEN Division = 'RLS' AND PHSpecInstrCode3 = 'PH' THEN 'Y' 
+			WHEN Division = 'RLS' AND StoreCode IN ('8029','0896') THEN 'Y' --RLS pop up stores
+			WHEN Source = 'SYSG' AND Division = 'PFS' AND Route = 'LOCAL' THEN 'Y'
+			ELSE 'N'
+		END
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Pack and Hold', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--STO Flag
+UPDATE Staging.dbo.OutboundMaster SET STO_Flag = CASE WHEN LEFT(CustomerPO,4) IN ('4500','4800') AND LEN(CustomerPO) = 10 THEN 'Y' ELSE 'N' END
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update STO Flag', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update AOS Flag
+UPDATE Staging.dbo.OutboundMaster SET HPD_AOS_Flag = CASE WHEN Division IN ('RLE-US','RLE-CA') AND HostApointmentNumber <> ''  THEN 'Y' ELSE 'N' END
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update AOS Flag', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Packed Date Time with PIX Data		
+UPDATE Staging.dbo.OutboundMaster SET PackedDateTime = P.DateTimeCreated
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN (SELECT O.Source,O.PlantCode,O.CartonNo,MIN(P.DateTimeCreated) AS DateTimeCreated
+				FROM Staging.dbo.OutboundMaster O
+					LEFT JOIN PkMSData.dbo.PIX_Packed P
+						ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.CartonNo = P.CaseNo
+				WHERE P.DateTimeCreated IS NOT NULL
+				GROUP BY O.Source,O.PlantCode,O.CartonNo) P
+ON M.Source = P.Source AND M.PlantCode = P.PlantCode AND M.CartonNo = P.CartonNo	
+WHERE M.Channel = 'Wholesale' AND M.PackedDateTime IS NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Packed Date Time With PIX Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Packed Date Time with OutboundTurnTime Data
+IF OBJECT_ID('tempdb..#Packed') IS NOT NULL DROP TABLE #Packed;
+
+SELECT O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime,MIN(MasterData.dbo.ConvertAS400DateTime(WCPDLM, WCPTLM)) AS PackedDateTime
+INTO #Packed
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN Reporting.dbo.vOutboundTurnTimeData T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.WCPCTL AND O.CartonNo = T.WCCASN
+WHERE O.Channel = 'Wholesale' AND T.WCRCTP = '02' AND O.PackedDateTime IS NULL AND T.WCPDLM >=  @FiscalBeginMinus1 AND T.WCPDLM IS NOT NULL
+GROUP BY O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime
+
+
+CREATE NONCLUSTERED INDEX IX_Packed ON #Packed (Source,PlantCode,ControlNo,CartonNo)
+
+UPDATE Staging.dbo.OutboundMaster SET PackedDateTime = T.PackedDateTime
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN #Packed T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.ControlNo AND O.CartonNo = T.CartonNo
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Packed Date Time with OutboundTurnTime Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Loaded Date Time with PIX Data		
+UPDATE Staging.dbo.OutboundMaster SET LoadedDateTime = P.DateTimeCreated
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN (SELECT O.Source,O.PlantCode,O.CartonNo,MIN(P.DateTimeCreated) AS DateTimeCreated
+				FROM Staging.dbo.OutboundMaster O
+					LEFT JOIN PkMSData.dbo.PIX_Loaded P
+						ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.CartonNo = P.CaseNo
+				WHERE P.DateTimeCreated IS NOT NULL
+				GROUP BY O.Source,O.PlantCode,O.CartonNo) P
+ON M.Source = P.Source AND M.PlantCode = P.PlantCode AND M.CartonNo = P.CartonNo
+WHERE (M.Channel = 'Wholesale' OR M.Division = 'PFS') AND M.LoadedDateTime IS NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Loaded Date Time With PIX Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Loaded Date Time with OutboundTurnTime Data
+IF OBJECT_ID('tempdb..#Loaded') IS NOT NULL DROP TABLE #Loaded;
+
+SELECT O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime,MIN(MasterData.dbo.ConvertAS400DateTime(WCPDLM, WCPTLM)) AS LoadedDateTime
+INTO #Loaded
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN Reporting.dbo.vOutboundTurnTimeData T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.WCPCTL AND O.CartonNo = T.WCCASN
+WHERE (O.Channel = 'Wholesale' OR O.Division = 'PFS') AND T.WCRCTP = '04' AND O.LoadedDateTime IS NULL AND T.WCPDLM >=  @FiscalBeginMinus1 AND T.WCPDLM IS NOT NULL
+GROUP BY O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime
+
+CREATE NONCLUSTERED INDEX IX_Loaded ON #Loaded (Source,PlantCode,ControlNo,CartonNo)
+
+UPDATE Staging.dbo.OutboundMaster SET LoadedDateTime = T.LoadedDateTime
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN #Loaded T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.ControlNo AND O.CartonNo = T.CartonNo
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Loaded Date Time with OutboundTurnTime Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Located Date Time with PIX Data		
+UPDATE Staging.dbo.OutboundMaster SET LocatedDateTime = P.DateTimeCreated
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN (SELECT O.Source,O.PlantCode,O.CartonNo,MIN(P.DateTimeCreated) AS DateTimeCreated
+				FROM Staging.dbo.OutboundMaster O
+					LEFT JOIN PkMSData.dbo.PIX_Located P
+						ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.CartonNo = P.CaseNo
+				WHERE P.DateTimeCreated IS NOT NULL
+				GROUP BY O.Source,O.PlantCode,O.CartonNo) P
+ON M.Source = P.Source AND M.PlantCode = P.PlantCode AND M.CartonNo = P.CartonNo	
+WHERE (M.Channel = 'Wholesale' OR M.Division = 'PFS') AND M.LocatedDateTime IS NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Located Date Time With PIX Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Located Date Time with OutboundTurnTime Data
+IF OBJECT_ID('tempdb..#Located') IS NOT NULL DROP TABLE #Located;
+
+SELECT O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime,MIN(MasterData.dbo.ConvertAS400DateTime(WCPDLM, WCPTLM)) AS LocatedDateTime
+INTO #Located
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN Reporting.dbo.vOutboundTurnTimeData T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.WCPCTL AND O.CartonNo = T.WCCASN
+WHERE (O.Channel = 'Wholesale' OR O.Division = 'PFS') AND T.WCRCTP = '03' AND O.LocatedDateTime IS NULL AND WCPDLM >= @FiscalBeginMinus1 AND WCPDLM IS NOT NULL
+GROUP BY O.Source,O.PlantCode,O.ControlNo,O.CartonNo,O.PickTicketCreatedDateTime
+
+
+CREATE NONCLUSTERED INDEX IX_Located ON #Located (Source,PlantCode,ControlNo,CartonNo)
+
+UPDATE Staging.dbo.OutboundMaster SET LocatedDateTime = T.LocatedDateTime
+FROM Staging.dbo.OutboundMaster O
+	INNER JOIN #Located T
+		ON O.Source = T.Source AND O.PlantCode = T.PlantCode AND O.ControlNo = T.ControlNo AND O.CartonNo = T.CartonNo
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Located Date Time with OutboundTurnTime Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Palletized Date Time with PIX Data		
+UPDATE Staging.dbo.OutboundMaster SET PalletizedDateTime = P.DateTimeCreated
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN (SELECT O.Source,O.PlantCode,O.CartonNo,MIN(P.DateTimeCreated) AS DateTimeCreated
+				FROM Staging.dbo.OutboundMaster O
+					LEFT JOIN PkMSData.dbo.PIX_Palletized P
+						ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.CartonNo = P.CaseNo
+				WHERE P.DateTimeCreated IS NOT NULL
+				GROUP BY O.Source,O.PlantCode,O.CartonNo) P
+ON M.Source = P.Source AND M.PlantCode = P.PlantCode AND M.CartonNo = P.CartonNo	
+WHERE (M.Channel = 'Wholesale' OR M.Division = 'PFS') AND M.PalletizedDateTime IS NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Palleized Date Time With PIX Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Manifested Date Time with PIX Data		
+UPDATE Staging.dbo.OutboundMaster SET ManifestedDateTime = P.DateTimeCreated
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN (SELECT O.Source,O.PlantCode,O.CartonNo,MIN(P.DateTimeCreated) AS DateTimeCreated
+				FROM Staging.dbo.OutboundMaster O
+					LEFT JOIN PkMSData.dbo.PIX_Manifested P
+						ON O.Source = P.Source AND O.PlantCode = P.PlantCode AND O.CartonNo = P.CaseNo
+				WHERE P.DateTimeCreated IS NOT NULL
+				GROUP BY O.Source,O.PlantCode,O.CartonNo) P
+ON M.Source = P.Source AND M.PlantCode = P.PlantCode AND M.CartonNo = P.CartonNo	
+WHERE (M.Channel = 'Wholesale' OR M.Division = 'PFS') AND M.ManifestedDateTime IS NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Manifested Date Time With PIX Data', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Ready Date Time
+UPDATE Staging.dbo.OutboundMaster 
+		SET ReadyDateTime = ISNULL(LocatedDateTime,ISNULL(ManifestedDateTime,ISNULL(PalletizedDateTime,LoadedDateTime)))
+WHERE (Channel = 'Wholesale' OR Division = 'PFS') 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Ready Date Time', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update eComm orders fields
+UPDATE Staging.dbo.OutboundMaster SET OrderDateTime = MasterData.dbo.ConvertAS400DateTime(CONVERT(varchar(8),CAST(OrderDateTime AS DATE),112),RIGHT('000000' + PHMisc9, 6)),
+											SoldToName = 'eComm Customer'
+WHERE Source = 'RLSYS01' AND PHSpecInstrCode2 IN ('51','53','54','55','56','57','88')
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update eComm Orders Fields', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Store Info (1st pass)
+UPDATE Staging.dbo.OutboundMaster SET SoldtoName = ST.Store, ShipToCity = ST.City, ShipToState = ST.StateCode,ShipToZip = ST.ZipCode
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.Stores ST
+		ON CAST(S.StoreCode AS bigint) = ST.StoreNo
+WHERE S.Channel = 'Retail' AND ST.StoreNo IS NOT NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Store Info (1st pass)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Store Info (2nd pass)
+UPDATE Staging.dbo.OutboundMaster SET SoldtoName = ST.Store, ShipToCity = ST.City, ShipToState = ST.StateCode,ShipToZip = ST.ZipCode
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.Stores ST
+		ON S.StoreCode = ST.StoreCode
+WHERE S.Channel = 'Retail' AND ST.StoreNo IS NOT NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Store Info (2nd pass)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update WMTransit
+UPDATE Staging.dbo.OutboundMaster SET WMTransit = D.DATRAN * 24
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN PkMSData.dbo.TRTORY00 T
+		LEFT JOIN PkMSData.dbo.DATRAN00 D
+			ON T.Source = D.Source And T.PlantCode = D.PlantCode AND TRTRTY = DATRTY AND TRROTP = DAROTP
+		ON M.PlantCode = T.TRWHSE AND M.RoutingType = D.DAROTP AND LEFT(M.ShipToZip,5) = T.TRSZPC
+WHERE M.Source = 'RLSYS01'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update WMTransit', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update eComm Estimated Delivery Date
+UPDATE Staging.dbo.OutboundMaster SET EstimatedDeliveryDate = MasterData.dbo.ConvertAS400DateTime(PHMisc11,'120000')
+WHERE Source = 'RLSYS01' AND Division IN ('RLE-US','CME-US','RLE-CA') AND PHMisc11 IS NOT NULL AND PHMisc11 <> ''
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update eComm Estimated Delivery Date', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Estimated Delivery Date for RLS
+UPDATE Staging.dbo.OutboundMaster SET EstimatedDeliveryDate = CAST(DATEADD(HOUR, RT.ClickToDeliverHoursSLA, M.WaveCreatedDateTime) AS Date)
+FROM Staging.dbo.OutboundMaster M
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON M.RoutingType = RT.RoutingTypeCode
+WHERE M.Division = 'RLS'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Estimated Delivery Date for RLS', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Estimated Delivery Date for PFS
+UPDATE Staging.dbo.OutboundMaster 
+	SET EstimatedDeliveryDate = CASE 
+									WHEN DATEPART(WEEKDAY,Cast(DATEADD(HOUR, 72 + ISNULL(S.PFSShipToDeliverSLA,3) ,WaveCreatedDateTime) AS DATE)) = 1 THEN
+										Cast(DATEADD(HOUR, 72 + ISNULL(S.PFSShipToDeliverSLA,3) + 24,WaveCreatedDateTime) AS DATE) --Sunday Delivery
+									WHEN DATEPART(WEEKDAY,Cast(DATEADD(HOUR, 72 + ISNULL(S.PFSShipToDeliverSLA,3) ,WaveCreatedDateTime) AS DATE)) = 7 THEN
+										Cast(DATEADD(HOUR, 72 + ISNULL(S.PFSShipToDeliverSLA,3) + 48,WaveCreatedDateTime) AS DATE) --Saturday Delivery
+									ELSE
+										Cast(DATEADD(HOUR, 72 + ISNULL(S.PFSShipToDeliverSLA,3) ,WaveCreatedDateTime) AS DATE) --All other days
+								END
+FROM Staging.dbo.OutboundMaster M		
+	LEFT JOIN SQL2008.SCDBMaster.dbo.States S
+		ON M.ShipToState = S.StateCode
+WHERE M.Division = 'PFS'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Estimated Delivery Date for PFS', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+
+DECLARE @dtSP_Begin datetime
+SET @dtSP_Begin = DATEADD(d,-45,GETDATE())
+
+IF OBJECT_ID('tempdb..#SP_DATA') IS NOT NULL DROP TABLE #SP_DATA;
+
+SELECT *
+INTO #SP_DATA
+FROM SQL2008.SCDBMaster.dbo.SmallParcelTracking
+WHERE Created >= @dtSP_Begin OR Modified >= @dtSP_Begin
+
+
+
+--Update Small Parcel Delivery
+UPDATE Staging.dbo.OutboundMaster SET DeliveredDateTime = S.ActDeliveryDate,SPEstimatedDeliveryDate = S.EstDeliveryDate,SPSource = S.Source,
+	SPPickedUpdate = S.PickUpDate
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN #SP_DATA S
+		ON O.TrackingNumber = S.TrackingNumber
+WHERE (DeliveredDateTime IS NULL OR SPEstimatedDeliveryDate IS NULL OR SPPickedUpDate IS NULL) 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Small Parcel Delivery', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Acknowledge Date 
+UPDATE Staging.dbo.OutboundMaster SET AcknowledgeDateTime = S.AcknowledgeDate
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN Reporting.dbo.StoreAcknowledgment S
+		ON O.CartonNo = S.CartonNo AND LEFT(O.Division,3) = S.StoreType
+WHERE O.Division IN ('RLS','PFS','RLS-CA') AND O.AcknowledgeDateTime IS NULL AND S.AcknowledgeDate >=  @dtSP_Begin
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Acknowledge Date', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Delivered Date for Pool Points
+UPDATE Staging.dbo.OutboundMaster SET DeliveredDateTime = B.PODDate
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN OutboundTracking.dbo.BearwareDelivery B  --2/27/27 PNag Changing from SQL2008.SCDBMaster.dbo.BearwareDelivery B
+		ON O.Source = B.Source AND O.PlantCode = B.PlantCode AND O.CartonNo = B.CartonNo AND O.WaveNo = B.WaveNo  AND O.ControlNo = B.ControlNo
+WHERE O.Division = 'PFS' AND O.DeliveredDateTime IS NULL 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Delivered Date for Pool Points', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Explode Units
+UPDATE Staging.dbo.OutboundMaster SET PackedUnits_Exploded = PackedUnits * ISNULL(PP.Quantity,1)
+FROM Staging.dbo.OutboundMaster O
+	LEFT JOIN MasterData.dbo.vPrePackQuantities PP
+		ON RIGHT(O.MaterialID,3) = PP.PrePackCode
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Explode Units', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Roll data up to the OrderNumber level for SAP Compare
+IF OBJECT_ID('tempdb..#ShipDollars_Rollup') IS NOT NULL DROP TABLE #ShipDollars_Rollup;
+
+
+SELECT DISTINCT Source,PlantCode,ControlNo,OrderNumber,UPC
+INTO #ShipDollars_Rollup
+FROM Staging.dbo.OutboundMaster
+WHERE Source <> 'NLS' AND ISNUMERIC(OrderNumber) = 1
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Roll Data Up to the OrderNumber Level for SAP Compare', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Pull SAP dollars
+IF OBJECT_ID('tempdb..#ShipDollars_Rollup_Dollars') IS NOT NULL DROP TABLE #ShipDollars_Rollup_Dollars;
+
+
+SELECT Source,PlantCode,ControlNo,OrderNumber,UPC,
+		MAX(O.NET_PRICE) AS NET_PRICE
+INTO #ShipDollars_Rollup_Dollars
+FROM #ShipDollars_Rollup S
+	LEFT JOIN RedshiftData.dbo.fact_bookings_prepack_v O
+		ON CAST(OrderNumber AS BIGINT) = O.SO_NUMBER AND S.UPC = O.EANUPC
+WHERE O.SO_NUMBER IS NOT NULL AND O.NET_PRICE > 0
+GROUP BY Source,PlantCode,ControlNo,OrderNumber,UPC
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Pull SAP dollars', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Apply SAP dollars to main table
+UPDATE Staging.dbo.OutboundMaster SET NetPriceSAP = R.NET_PRICE
+FROM Staging.dbo.OutboundMaster S
+	INNER JOIN #ShipDollars_Rollup_Dollars R
+		ON S.Source = R.Source AND S.PlantCode = R.PlantCode AND S.ControlNo = R.ControlNo AND S.OrderNumber = R.OrderNumber AND S.UPC = R.UPC
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Apply SAP Dollars to Main Table', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Pack Dollars
+UPDATE Staging.dbo.OutboundMaster 
+	SET PackedDollars = 
+		CASE 
+			WHEN NetPriceSAP > 0 AND NetPriceSAP IS NOT NULL THEN NetPriceSAP * PackedUnits
+			WHEN Source = 'RLSYS01' OR Division = 'PFS' THEN PackedUnits * CASE WHEN ISNULL(NetPriceSAP,0) = 0 THEN RetailPrice ELSE NetPriceSAP END
+			ELSE 0
+		END
+FROM Staging.dbo.OutboundMaster 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Pack Dollars', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Zero out STO Dollars
+UPDATE Staging.dbo.OutboundMaster SET PackedDollars = 0
+WHERE LEFT(CustomerPO,4) IN ('4500','4800') AND LEN(CustomerPO) = 10 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Zero out STO Dollars', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--************************************************************************************************
+--										****Exceptions****
+--************************************************************************************************
+
+--****All Channels Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Allocate To Wave Exception
+UPDATE Staging.dbo.OutboundMaster SET AllocateToWaveException = 
+	CASE 
+		WHEN PickTicketCreatedDateTime IS NULL OR CAST(PickTicketCreatedDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				WaveCreatedDateTime < PickTicketCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions (All Channels)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--****DTC Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Click To Ship Exception
+UPDATE Staging.dbo.OutboundMaster SET ClickToShipException = 
+	CASE 
+		WHEN OrderDateTime IS NULL OR CAST(OrderDateTime AS DATE) = '1/1/1900' OR 
+				ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR
+				ShipDateTime < OrderDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC'
+
+--Click To Deliver Exception
+UPDATE Staging.dbo.OutboundMaster SET ClickToDeliverException = 
+	CASE 
+		WHEN OrderDateTime IS NULL OR CAST(OrderDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < OrderDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC'
+
+--Ship To Deliver Exception
+UPDATE Staging.dbo.OutboundMaster SET ShipToDeliverException = 
+	CASE 
+		WHEN ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < ShipDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC'
+
+
+--EDD Exception
+UPDATE Staging.dbo.OutboundMaster SET EDDException = 
+	CASE 
+		WHEN EstimatedDeliveryDate IS NULL OR CAST(EstimatedDeliveryDate AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions (DTC)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****Retail Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Ship Exception
+UPDATE Staging.dbo.OutboundMaster SET WaveToShipException = 
+	CASE 
+		WHEN WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR 
+				ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR
+				ShipDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail'
+
+
+--Ship To Deliver Exception
+UPDATE Staging.dbo.OutboundMaster SET ShipToDeliverException = 
+	CASE 
+		WHEN ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < ShipDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail'
+
+
+--Wave To Deliver Exception
+UPDATE Staging.dbo.OutboundMaster SET WaveToDeliverException = 
+	CASE 
+		WHEN WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail'
+
+
+
+--Deliver To Acknowledge Exception
+UPDATE Staging.dbo.OutboundMaster SET DeliverToAcknowedgeException = 
+	CASE 
+		WHEN AcknowledgeDateTime IS NULL OR CAST(AcknowledgeDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				AcknowledgeDateTime < DeliveredDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail'
+
+
+--EDD Exception
+UPDATE Staging.dbo.OutboundMaster SET EDDException = 
+	CASE 
+		WHEN EstimatedDeliveryDate IS NULL OR CAST(EstimatedDeliveryDate AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail'
+
+
+--Wave To Located Exception - 5/2/2024 ATysinger
+UPDATE Staging.dbo.OutboundMaster SET WaveToLocatedException = 
+	CASE 
+		WHEN LocatedDateTime IS NULL OR CAST(LocatedDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				LocatedDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Division = 'PFS'
+
+
+--Wave To Ready Exception
+UPDATE Staging.dbo.OutboundMaster SET WaveToReadyException = 
+	CASE 
+		WHEN ReadyDateTime IS NULL OR CAST(ReadyDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				ReadyDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Division = 'PFS'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions (Retail)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****Wholesale Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Located Exception
+UPDATE Staging.dbo.OutboundMaster SET WaveToLocatedException = 
+	CASE 
+		WHEN LocatedDateTime IS NULL OR CAST(LocatedDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				LocatedDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Wholesale'
+
+
+--Start To Allocate Exception
+UPDATE Staging.dbo.OutboundMaster SET StartToAllocateException = 
+	CASE 
+		WHEN StartShipDate IS NULL OR CAST(StartShipDate AS DATE) = '1/1/1900' OR 
+				PickTicketCreatedDateTime IS NULL OR CAST(PickTicketCreatedDateTime AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Wholesale'
+
+
+--Wave To Ready Exception
+UPDATE Staging.dbo.OutboundMaster SET WaveToReadyException = 
+	CASE 
+		WHEN ReadyDateTime IS NULL OR CAST(ReadyDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				ReadyDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Division = 'Wholesale'
+
+
+--Start To Located Exception
+UPDATE Staging.dbo.OutboundMaster SET StartToLocatedException = 
+	CASE 
+		WHEN StartShipDate IS NULL OR CAST(StartShipDate AS DATE) = '1/1/1900' OR 
+				LocatedDateTime IS NULL OR CAST(LocatedDateTime AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Wholesale'
+
+
+--Located To Ship Exception
+UPDATE Staging.dbo.OutboundMaster SET LocatedToShipException = 
+	CASE 
+		WHEN LocatedDateTime IS NULL OR CAST(LocatedDateTime AS DATE) = '1/1/1900' OR 
+				ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR
+				ShipDateTime < LocatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Wholesale'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions (Wholesale)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+
+--************************************************************************************************
+--										****Metrics****
+--************************************************************************************************
+
+
+--****All Channels Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Allocate to Wave
+UPDATE Staging.dbo.OutboundMaster SET AllocateToWaveHours = DATEDIFF(HOUR,PickTicketCreatedDateTime,WaveCreatedDateTime)
+WHERE AllocateToWaveException = 'N'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics (All Channels)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--****DTC Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Click To Ship 
+UPDATE Staging.dbo.OutboundMaster SET ClickToShipHours = DATEDIFF(HOUR,OrderDateTime,ShipDateTime)
+WHERE Channel = 'DTC' AND ClickToShipException = 'N'
+
+--Ship To Deliver
+UPDATE Staging.dbo.OutboundMaster SET ShipToDeliverHours = DATEDIFF(HOUR,ShipDateTime,DeliveredDateTime)
+WHERE Channel = 'DTC' AND ShipToDeliverException = 'N'
+
+
+--Click To Deliver
+UPDATE Staging.dbo.OutboundMaster SET ClickToDeliverHours = DATEDIFF(HOUR,OrderDateTime,DeliveredDateTime)
+WHERE Channel = 'DTC' AND ClickToDeliverException = 'N'
+
+
+--Before/On/After EDD
+UPDATE Staging.dbo.OutboundMaster SET BeforeOnAfterEDD = ISNULL(
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) > CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Before'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) = CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'On'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) < CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'After'
+		ELSE 'Other'
+	END,'Other')
+WHERE Channel = 'DTC' 
+
+
+--On Time 
+UPDATE Staging.dbo.OutboundMaster SET OnTime = 
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) >= CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' 
+
+
+--Set In SLA Flag Click To Ship
+UPDATE Staging.dbo.OutboundMaster SET InSLA_ClickToShip = 
+	CASE
+		WHEN S.ClickToShipHours-RT.ClickToShipHoursSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'DTC' AND ClickToShipException = 'N'
+
+
+--Set In SLA Flag Click To Deliver
+UPDATE Staging.dbo.OutboundMaster SET InSLA_ClickToDeliver = 
+	CASE
+		WHEN S.ClickToDeliverHours-RT.ClickToDeliverHoursSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'DTC' AND ClickToDeliverException = 'N'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics (DTC)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****Retail Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Ship 
+UPDATE Staging.dbo.OutboundMaster SET WaveToShipHours = DATEDIFF(HOUR,WaveCreatedDateTime,ShipDateTime)
+WHERE Channel = 'Retail' AND WaveToShipException = 'N'
+
+--Ship To Deliver
+UPDATE Staging.dbo.OutboundMaster SET ShipToDeliverHours = DATEDIFF(HOUR,ShipDateTime,DeliveredDateTime)
+WHERE Channel = 'Retail' AND ShipToDeliverException = 'N'
+
+
+--Wave To Deliver
+UPDATE Staging.dbo.OutboundMaster SET WaveToDeliverHours = DATEDIFF(HOUR,WaveCreatedDateTime,DeliveredDateTime)
+WHERE Channel = 'Retail' AND WaveToDeliverException = 'N'
+
+
+--Deliver To Acknowledge
+UPDATE Staging.dbo.OutboundMaster SET DeliverToAcknowledgeHours = DATEDIFF(HOUR,DeliveredDateTime,AcknowledgeDateTime)
+WHERE Channel = 'Retail' AND DeliverToAcknowedgeException = 'N'
+
+--Before/On/After EDD
+UPDATE Staging.dbo.OutboundMaster SET BeforeOnAfterEDD = ISNULL(
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) > CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Before'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) = CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'On'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) < CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'After'
+		ELSE 'Other'
+	END,'Other')
+WHERE Channel = 'Retail' 
+
+
+--On Time 
+UPDATE Staging.dbo.OutboundMaster SET OnTime = 
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) >= CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' 
+
+
+--Set In SLA Flag Click To Ship (RLS Only Until PFS is defined)
+UPDATE Staging.dbo.OutboundMaster SET InSLA_ClickToShip = 
+	CASE
+		WHEN S.WaveToShipHours-RT.ClickToShipHoursSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'Retail' AND Division = 'RLS' AND WaveToShipException = 'N'
+
+
+--Set In SLA Flag Click To Ship (PFS Only Until RLS is defined)
+UPDATE Staging.dbo.OutboundMaster SET InSLA_ShipToDeliver = 
+	CASE
+		WHEN S.ShipToDeliverHours-RT.PFSShipToDeliverSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Staging.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.States RT
+		ON S.ShipToState = RT.StateCode
+WHERE Channel = 'Retail' AND Division = 'PFS' AND ShipToDeliverException = 'N'
+
+
+--Wave To Locate PFS - 5/2/2024 ATysinger
+UPDATE Staging.dbo.OutboundMaster SET WaveToLocateHours = DATEDIFF(HOUR,WaveCreatedDateTime,LocatedDateTime)
+WHERE Division = 'PFS' AND WaveToLocatedException = 'N'
+
+
+--Wave To Ready PFS
+UPDATE Staging.dbo.OutboundMaster SET WaveToReadyHours = DATEDIFF(HOUR,WaveCreatedDateTime,ReadyDateTime)
+WHERE Division = 'PFS' AND WaveToReadyException = 'N'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics (Retail)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****Wholesale Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Locate
+UPDATE Staging.dbo.OutboundMaster SET WaveToLocateHours = DATEDIFF(HOUR,WaveCreatedDateTime,LocatedDateTime)
+WHERE Channel = 'Wholesale' AND WaveToLocatedException = 'N'
+
+
+--Start To Allocate
+UPDATE Staging.dbo.OutboundMaster SET StartToAllocate = DATEDIFF(HOUR,StartShipDate,PickTicketCreatedDateTime)
+WHERE Channel = 'Wholesale' AND StartToAllocateException = 'N'
+
+
+--Start To Locate
+UPDATE Staging.dbo.OutboundMaster SET StartToLocated = DATEDIFF(HOUR,StartShipDate,LocatedDateTime)
+WHERE Channel = 'Wholesale' AND StartToLocatedException = 'N'
+
+
+--Wave To Ready Wholesale
+UPDATE Staging.dbo.OutboundMaster SET WaveToReadyHours = DATEDIFF(HOUR,WaveCreatedDateTime,ReadyDateTime)
+WHERE Division = 'Wholesale' AND WaveToReadyException = 'N'
+
+
+--Locate To Ship
+UPDATE Staging.dbo.OutboundMaster SET LocatedToShip = DATEDIFF(HOUR,LocatedDateTime,ShipDateTime)
+WHERE Channel = 'Wholesale' AND LocatedToShipException = 'N'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics (Wholesale)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--Update Recalc Flag
+UPDATE Staging.dbo.OutboundMaster SET ReCalc = 'N'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Recalc Flag', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--Delete Records in Reporting that are in Staging
+DELETE FROM Reporting.dbo.OutboundMaster
+FROM Reporting.dbo.OutboundMaster M
+	INNER JOIN Staging.dbo.OutboundMaster S
+		ON M.Source = S.Source AND M.FiscalYear = S.FiscalYear AND M.PlantCode = S.PlantCode AND M.ControlNo = S.ControlNo AND M.ControlLineNo = S.ControlLineNo AND M.CartonNo = S.CartonNo AND
+					M.UPC = S.UPC AND M.SeasonCode = S.SeasonCode AND M.MinorControlNo = S.MinorControlNo 
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Delete Records in Reporting that are in Staging', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--Insert Staging Records into Reporting
+INSERT INTO Reporting.dbo.OutboundMaster
+SELECT * FROM Staging.dbo.OutboundMaster
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Insert Staging Records into Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--************************************************************************************************
+--                       ***********Update New Data in Reporting***************
+--************************************************************************************************
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Small Parcel Delivery 
+UPDATE Reporting.dbo.OutboundMaster SET DeliveredDateTime = S.ActDeliveryDate,SPPickedUpdate = S.PickUpDate,SPEstimatedDeliveryDate = S.EstDeliveryDate,ReCalc = 'Y'
+FROM Reporting.dbo.OutboundMaster O
+	LEFT JOIN #SP_DATA S
+		ON O.TrackingNumber = S.TrackingNumber
+WHERE O.Channel <> 'Wholesale' AND (DeliveredDateTime IS NULL OR SPEstimatedDeliveryDate IS NULL OR SPPickedUpDate IS NULL) AND 
+		(S.ActDeliveryDate IS NOT NULL OR S.EstDeliveryDate IS NOT NULL OR S.PickUpDate IS NOT NULL)
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Small Parcel Delivery in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Acknowledge Date 
+UPDATE Reporting.dbo.OutboundMaster SET AcknowledgeDateTime = S.AcknowledgeDate,ReCalc = 'Y'
+FROM Reporting.dbo.OutboundMaster O
+	LEFT JOIN Reporting.dbo.StoreAcknowledgment S
+		ON O.CartonNo = S.CartonNo AND LEFT(O.Division,3) = S.StoreType
+WHERE O.Division IN ('RLS','PFS','RLS-CA') AND O.AcknowledgeDateTime IS NULL AND S.AcknowledgeDate >=  @dtSP_Begin AND S.AcknowledgeDate IS NOT NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Acknowledge Date in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Delivered Date for Pool Points
+UPDATE Reporting.dbo.OutboundMaster SET DeliveredDateTime = B.PODDate, ReCalc = 'Y'
+FROM Reporting.dbo.OutboundMaster O
+	LEFT JOIN OutboundTracking.dbo.BearwareDelivery B  --2/27/27 PNag Changing from SQL2008.SCDBMaster.dbo.BearwareDelivery
+		ON O.Source = B.Source AND O.PlantCode = B.PlantCode AND O.CartonNo = B.CartonNo AND O.WaveNo = B.WaveNo  AND O.ControlNo = B.ControlNo
+WHERE O.Division = 'PFS' AND O.DeliveredDateTime IS NULL AND B.PODDate IS NOT NULL
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Delivered Date for Pool Point in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--*********************************Update MerchOrgCombo*********************************
+
+SET @dtBeginDateTime = GETDATE()
+
+IF OBJECT_ID('tempdb..#PTList') IS NOT NULL DROP TABLE #PTList;
+
+SELECT DISTINCT U.Source,U.PlantCode,U.ControlNo,U.SeasonCode, U.MaterialID, U.Merch_Org_Cd,U.WaveNo
+INTO #PTList
+FROM (SELECT O1.Source,O1.PlantCode,O1.ControlNo,O1.SeasonCode, O1.MaterialID, M1.Merch_Org_Cd,O1.WaveNo
+		FROM Reporting.dbo.OutboundMaster O1
+			LEFT JOIN MasterData.dbo.vMaterialMaster M1
+				ON O1.SeasonCode = M1.SeasonCode_PkMS AND O1.MaterialID = M1.Material_PkMS
+		WHERE O1.MerchOrgComboCode IS NULL AND ((O1.Source <> 'NLS' AND O1.WaveNo IS NOT NULL) OR (O1.Source = 'SAP'))
+		UNION 
+		SELECT O2.Source,O2.PlantCode,O2.ControlNo,O2.SeasonCode, O2.MaterialID, M2.Merch_Org_Cd,O2.WaveNo
+		FROM Staging.dbo.OutboundMaster O2
+			LEFT JOIN MasterData.dbo.vMaterialMaster M2
+				ON O2.SeasonCode = M2.SeasonCode_PkMS AND O2.MaterialID = M2.Material_PkMS
+		WHERE O2.Source <> ('NLS')) U
+
+
+IF OBJECT_ID('tempdb..#PD') IS NOT NULL DROP TABLE #PD;
+
+SELECT DISTINCT Source, PlantCode, ControlNo,O.Merch_Org_Cd, MerchOrgBit,WaveNo
+INTO #PD
+FROM #PTList O
+	LEFT JOIN MasterData.dbo.MerchOrgBit AS M
+		ON O.Merch_Org_Cd = M.merch_org_cd
+
+
+
+IF OBJECT_ID('tempdb..#MerchOrgComboCodes') IS NOT NULL DROP TABLE #MerchOrgComboCodes;
+
+SELECT DISTINCT Source, PlantCode, ControlNo, SUM(MerchOrgBit) AS MerchOrgComboCode,WaveNo
+INTO #MerchOrgComboCodes
+FROM #PD
+GROUP BY Source, PlantCode, ControlNo,WaveNo
+
+CREATE NONCLUSTERED INDEX IX_MerchOrgComboCodes ON #MerchOrgComboCodes(Source,PlantCode,ControlNo,WaveNo)
+
+
+
+UPDATE Reporting.dbo.OutboundMaster SET MerchOrgComboCode = M.MerchOrgComboCode
+FROM Reporting.dbo.OutboundMaster O
+	LEFT JOIN #MerchOrgComboCodes M
+		ON O.Source = M.Source AND O.PlantCode = M.PlantCode AND O.ControlNo = M.ControlNo AND O.WaveNo = M.WaveNo
+WHERE M.MerchOrgComboCode IS NOT NULL 
+
+
+UPDATE Reporting.dbo.OutboundMaster SET MerchOrgComboCode = M.MerchOrgComboCode
+FROM Reporting.dbo.OutboundMaster O
+	LEFT JOIN #MerchOrgComboCodes M
+		ON O.Source = M.Source AND O.PlantCode = M.PlantCode AND O.ControlNo = M.ControlNo 
+WHERE M.MerchOrgComboCode IS NOT NULL AND M.Source = 'SAP' AND O.Source = 'SAP'
+
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update MerchOrgCombo in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--*********************************Update RedShift Dollars in Reporting*********************************
+
+
+--Just in case SAP IMport failed when data was originally populated - ATysinger 2/23/2022
+
+SET @dtBeginDateTime = GETDATE()
+
+--Roll data up to the OrderNumber level for SAP Compare
+IF OBJECT_ID('tempdb..#ShipDollars_Rollup2') IS NOT NULL DROP TABLE #ShipDollars_Rollup2;
+
+
+SELECT DISTINCT Source,PlantCode,ControlNo,OrderNumber,UPC
+INTO #ShipDollars_Rollup2
+FROM Reporting.dbo.OutboundMaster
+WHERE Source <> 'NLS' AND Channel <> 'DTC' AND ISNUMERIC(OrderNumber) = 1 AND (NetPriceSAP IS NULL OR NetPriceSAP = 0) --ATysinger 9/30/2022 Changed to add in'OR NetPriceSAP = 0'
+
+
+--Pull SAP dollars
+IF OBJECT_ID('tempdb..#ShipDollars_Rollup_Dollars2') IS NOT NULL DROP TABLE #ShipDollars_Rollup_Dollars2;
+
+
+SELECT Source,PlantCode,ControlNo,OrderNumber,UPC,
+		MAX(O.NET_PRICE) AS NET_PRICE
+INTO #ShipDollars_Rollup_Dollars2
+FROM #ShipDollars_Rollup2 S
+	LEFT JOIN RedshiftData.dbo.fact_bookings_prepack_v O
+		ON CAST(OrderNumber AS BIGINT) = O.SO_NUMBER AND S.UPC = O.EANUPC
+WHERE O.SO_NUMBER IS NOT NULL AND O.NET_PRICE > 0
+GROUP BY Source,PlantCode,ControlNo,OrderNumber,UPC
+
+
+--Apply SAP dollars to main table
+UPDATE Reporting.dbo.OutboundMaster SET NetPriceSAP = R.NET_PRICE, ReCalc = CASE WHEN ReCalc = 'N' THEN 'DN' ELSE 'DY' END 
+FROM Reporting.dbo.OutboundMaster S
+	INNER JOIN #ShipDollars_Rollup_Dollars2 R
+		ON S.Source = R.Source AND S.PlantCode = R.PlantCode AND S.ControlNo = R.ControlNo AND S.OrderNumber = R.OrderNumber AND S.UPC = R.UPC
+		
+--Update Pack Dollars
+UPDATE Reporting.dbo.OutboundMaster SET PackedDollars = NetPriceSAP * PackedUnits, ReCalc = CASE WHEN ReCalc = 'DY' THEN 'Y' ELSE 'N' END
+FROM Reporting.dbo.OutboundMaster 
+WHERE Channel = 'Wholesale' AND ReCalc IN ('DY','DN')
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update RedShift Dollars in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--************************************************************************************************
+--          ***********Recalculate Reporting Rows Affected by Data Updates***************
+--************************************************************************************************
+
+
+--****Exceptions***
+
+--****All Channels Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Allocate To Wave Exception
+UPDATE Reporting.dbo.OutboundMaster SET AllocateToWaveException = 
+	CASE 
+		WHEN PickTicketCreatedDateTime IS NULL OR CAST(PickTicketCreatedDateTime AS DATE) = '1/1/1900' OR 
+				WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR
+				WaveCreatedDateTime < PickTicketCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions in Reporting (All Channels)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--****DTC Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Click To Ship Exception
+UPDATE Reporting.dbo.OutboundMaster SET ClickToShipException = 
+	CASE 
+		WHEN OrderDateTime IS NULL OR CAST(OrderDateTime AS DATE) = '1/1/1900' OR 
+				ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR
+				ShipDateTime < OrderDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' AND ReCalc = 'Y'
+
+
+--Ship To Deliver Exception
+UPDATE Reporting.dbo.OutboundMaster SET ShipToDeliverException = 
+	CASE 
+		WHEN ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < ShipDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' AND ReCalc = 'Y'
+
+
+--Click To Deliver Exception
+UPDATE Reporting.dbo.OutboundMaster SET ClickToDeliverException = 
+	CASE 
+		WHEN OrderDateTime IS NULL OR CAST(OrderDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < OrderDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' AND ReCalc = 'Y'
+
+
+--EDD Exception
+UPDATE Reporting.dbo.OutboundMaster SET EDDException = 
+	CASE 
+		WHEN EstimatedDeliveryDate IS NULL OR CAST(EstimatedDeliveryDate AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' AND ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions in Reporting (DTC)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--****Retail Exceptions****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Ship Exception
+UPDATE Reporting.dbo.OutboundMaster SET WaveToShipException = 
+	CASE 
+		WHEN WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR 
+				ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR
+				ShipDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' AND ReCalc = 'Y'
+
+
+--Ship To Deliver Exception
+UPDATE Reporting.dbo.OutboundMaster SET ShipToDeliverException = 
+	CASE 
+		WHEN ShipDateTime IS NULL OR CAST(ShipDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < ShipDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' AND ReCalc = 'Y'
+
+
+
+--Wave To Deliver Exception
+UPDATE Reporting.dbo.OutboundMaster SET WaveToDeliverException = 
+	CASE 
+		WHEN WaveCreatedDateTime IS NULL OR CAST(WaveCreatedDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				DeliveredDateTime < WaveCreatedDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' AND ReCalc = 'Y'
+
+
+--Deliver To Acknowledge Exception
+UPDATE Reporting.dbo.OutboundMaster SET DeliverToAcknowedgeException = 
+	CASE 
+		WHEN AcknowledgeDateTime IS NULL OR CAST(AcknowledgeDateTime AS DATE) = '1/1/1900' OR 
+				DeliveredDateTime IS NULL OR CAST(DeliveredDateTime AS DATE) = '1/1/1900' OR
+				AcknowledgeDateTime < DeliveredDateTime
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' AND ReCalc = 'Y'
+
+
+--EDD Exception
+UPDATE Reporting.dbo.OutboundMaster SET EDDException = 
+	CASE 
+		WHEN EstimatedDeliveryDate IS NULL OR CAST(EstimatedDeliveryDate AS DATE) = '1/1/1900'
+				THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' AND ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Exceptions in Reporting (Retail)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****All Channels Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Allocate to Wave
+UPDATE Reporting.dbo.OutboundMaster SET AllocateToWaveHours = DATEDIFF(HOUR,PickTicketCreatedDateTime,WaveCreatedDateTime)
+WHERE AllocateToWaveException = 'N' AND ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics in Reporting (All Channels)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+
+--****DTC Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Click To Ship 
+UPDATE Reporting.dbo.OutboundMaster SET ClickToShipHours = DATEDIFF(HOUR,OrderDateTime,ShipDateTime)
+WHERE Channel = 'DTC' AND ClickToShipException = 'N' AND ReCalc = 'Y'
+
+--Ship To Deliver
+UPDATE Reporting.dbo.OutboundMaster SET ShipToDeliverHours = DATEDIFF(HOUR,ShipDateTime,DeliveredDateTime)
+WHERE Channel = 'DTC' AND ShipToDeliverException = 'N' AND ReCalc = 'Y'
+
+
+--Click To Deliver
+UPDATE Reporting.dbo.OutboundMaster SET ClickToDeliverHours = DATEDIFF(HOUR,OrderDateTime,DeliveredDateTime)
+WHERE Channel = 'DTC' AND ClickToDeliverException = 'N' AND ReCalc = 'Y'
+
+
+--Before/On/After EDD
+UPDATE Reporting.dbo.OutboundMaster SET BeforeOnAfterEDD = ISNULL(
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) > CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Before'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) = CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'On'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) < CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'After'
+		ELSE 'Other'
+	END,'Other')
+WHERE Channel = 'DTC' /*AND EDDException = 'N'*/ AND ReCalc = 'Y'
+
+
+--On Time 
+UPDATE Reporting.dbo.OutboundMaster SET OnTime = 
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) >= CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'DTC' /*AND EDDException = 'N'*/ AND ReCalc = 'Y'
+
+
+--Set In SLA Flag Click To Ship
+UPDATE Reporting.dbo.OutboundMaster SET InSLA_ClickToShip = 
+	CASE
+		WHEN S.ClickToShipHours-RT.ClickToShipHoursSLA <=0 THEN 'Y'
+		ELSE 'N' 
+	END
+FROM Reporting.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'DTC' AND ClickToShipException = 'N' AND ReCalc = 'Y'
+
+
+--Set In SLA Flag Click To Deliver
+UPDATE Reporting.dbo.OutboundMaster SET InSLA_ClickToDeliver = 
+	CASE
+		WHEN S.ClickToDeliverHours-RT.ClickToDeliverHoursSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Reporting.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'DTC' AND ClickToDeliverException = 'N' AND ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics in Reporting (DTC)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+--****Retail Metrics****
+
+SET @dtBeginDateTime = GETDATE()
+
+--Wave To Ship 
+UPDATE Reporting.dbo.OutboundMaster SET WaveToShipHours = DATEDIFF(HOUR,WaveCreatedDateTime,ShipDateTime)
+WHERE Channel = 'Retail' AND WaveToShipException = 'N' AND ReCalc = 'Y'
+
+--Ship To Deliver
+UPDATE Reporting.dbo.OutboundMaster SET ShipToDeliverHours = DATEDIFF(HOUR,ShipDateTime,DeliveredDateTime)
+WHERE Channel = 'Retail' AND ShipToDeliverException = 'N' AND ReCalc = 'Y'
+
+
+--Wave To Deliver
+UPDATE Reporting.dbo.OutboundMaster SET WaveToDeliverHours = DATEDIFF(HOUR,WaveCreatedDateTime,DeliveredDateTime)
+WHERE Channel = 'Retail' AND WaveToDeliverException = 'N' AND ReCalc = 'Y'
+
+
+--Deliver To Acknowledge
+UPDATE Reporting.dbo.OutboundMaster SET DeliverToAcknowledgeHours = DATEDIFF(HOUR,DeliveredDateTime,AcknowledgeDateTime)
+WHERE Channel = 'Retail' AND DeliverToAcknowedgeException = 'N' AND ReCalc = 'Y'
+
+
+--Before/On/After EDD
+UPDATE Reporting.dbo.OutboundMaster SET BeforeOnAfterEDD = ISNULL(
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) > CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Before'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) = CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'On'
+		WHEN CAST(EstimatedDeliveryDate AS DATE) < CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'After'
+		ELSE 'Other'
+	END, 'Other')
+WHERE Channel = 'Retail' AND /*EDDException = 'N' AND*/ ReCalc = 'Y'
+
+
+--On Time 
+UPDATE Reporting.dbo.OutboundMaster SET OnTime = 
+	CASE
+		WHEN CAST(EstimatedDeliveryDate AS DATE) >= CAST(DeliveredDateTime AS DATE) AND EDDException = 'N' AND ClickToDeliverException = 'N' THEN 'Y'
+		ELSE 'N'
+	END
+WHERE Channel = 'Retail' /*AND EDDException = 'N'*/ AND ReCalc = 'Y'
+
+
+--Set In SLA Flag Click To Ship (RLS Only Until PFS is defined)
+UPDATE Reporting.dbo.OutboundMaster SET InSLA_ClickToShip = 
+	CASE
+		WHEN S.WaveToShipHours-RT.ClickToShipHoursSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Reporting.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.RoutingTypeCodes RT
+		ON S.RoutingType = RT.RoutingTypeCode
+WHERE Channel = 'Retail' AND Division = 'RLS' AND WaveToShipException = 'N' AND ReCalc = 'Y'
+
+
+--Set In SLA Flag Click To Ship (PFS Only Until RLS is defined)
+UPDATE Reporting.dbo.OutboundMaster SET InSLA_ShipToDeliver = 
+	CASE
+		WHEN S.ShipToDeliverHours-RT.PFSShipToDeliverSLA <=0 THEN 'Y'
+		ELSE 'N'
+	END
+FROM Reporting.dbo.OutboundMaster S
+	LEFT JOIN SQL2008.SCDBMaster.dbo.States RT
+		ON S.ShipToState = RT.StateCode
+WHERE Channel = 'Retail' AND Division = 'PFS' AND ShipToDeliverException = 'N' AND ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Metrics in Reporting (Retail)', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
+
+SET @dtBeginDateTime = GETDATE()
+
+--Update Recalc Flag
+UPDATE Reporting.dbo.OutboundMaster SET ReCalc = 'N'
+WHERE ReCalc = 'Y'
+
+EXECUTE ProcessLog.dbo.ProcessLogUpdate @ProcessID = @intProcessID, @Message = 'Complete: Update Recalc Flag in Reporting', @StartTime = @dtBeginDateTime, @RecordCount = @@ROWCOUNT
