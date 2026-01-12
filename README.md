@@ -1,6 +1,57 @@
-# Real Estate Expert - Zoning & Property Analysis Tool
+# 🏠 Real Estate Expert - Zoning & Property Analysis Tool
 
 A comprehensive real estate analysis tool that helps investors and developers analyze properties for construction and investment opportunities, with a focus on zoning regulations and market analysis.
+
+## 🎯 Quick Answer: What is RS-9 Zoning?
+
+**RS-9 in Winston-Salem, NC** means:
+- ✅ **Single-family homes only** (9,000+ sq ft lots)
+- ✅ **~4 homes per acre** maximum density
+- ❌ **No apartments or commercial** without special approval
+- 💰 **Stable, low-risk residential investment**
+
+**For Miller Rd, Winston Salem, NC 27106:**
+- Current market: $231k-$270k median prices
+- Good for: Single-family construction or rental investment
+- Available: Land lots and existing homes
+
+👉 **See [ZONING_GUIDE.md](ZONING_GUIDE.md) for quick reference**  
+👉 **Run the tool below for complete analysis**
+
+## 🚀 Quick Start
+
+### Run the Complete Analysis
+
+```bash
+# Run the full analysis for Miller Rd, Winston Salem, NC 27106
+python3 real_estate_expert.py
+```
+
+This generates:
+- 📊 Complete console report with all details
+- 💾 JSON file: `real_estate_analysis_report.json`
+
+### Run Usage Examples
+
+```bash
+# See focused examples of different features
+python3 examples.py
+```
+
+### What You Get
+
+The tool analyzes **Miller Rd, Winston Salem, NC 27106 (RS-9 Zoning)** and provides:
+
+1. **Zoning Analysis** - What RS-9 means for construction
+2. **Market Data** - Current prices, sales, and trends
+3. **Investment Metrics** - Costs, returns, and profitability
+4. **Recommendations** - Best strategies for this property
+
+## 📖 Documentation
+
+- **[README.md](README.md)** ← You are here (Main documentation)
+- **[ZONING_GUIDE.md](ZONING_GUIDE.md)** ← Quick reference for RS-9 zoning
+- **[examples.py](examples.py)** ← Code examples and usage
 
 ## Features
 
